@@ -1,6 +1,7 @@
 """
 llm-response-classifier: Classify LLM response text into labeled categories using rule patterns.
 """
+
 from __future__ import annotations
 
 import re
@@ -11,9 +12,9 @@ from typing import Optional
 @dataclass
 class ClassifyResult:
     label: str
-    confidence: float          # 0.0-1.0 based on match quality
+    confidence: float  # 0.0-1.0 based on match quality
     matched_pattern: Optional[str]
-    scores: dict[str, float]   # per-class scores
+    scores: dict[str, float]  # per-class scores
 
     @property
     def is_uncertain(self) -> bool:
@@ -89,10 +90,10 @@ class ResponseClassifier:
             scores[cls.label] = s
             first_matches[cls.label] = fm
 
-        best_label = max(scores, key=lambda l: scores[l])
+        best_label = max(scores, key=lambda label: scores[label])
         best_score = scores[best_label]
 
-        if best_score == 0.0:
+        if best_score <= 0.0:
             return ClassifyResult(
                 label=self._default,
                 confidence=0.0,
@@ -100,8 +101,10 @@ class ResponseClassifier:
                 scores=scores,
             )
 
-        total = sum(scores.values()) or 1.0
-        confidence = min(best_score / total, 1.0)
+        # Only positive contributions count toward the normalization total so
+        # that negative-weight classes can never inflate or invert confidence.
+        total = sum(s for s in scores.values() if s > 0.0) or best_score
+        confidence = min(max(best_score / total, 0.0), 1.0)
 
         return ClassifyResult(
             label=best_label,
@@ -120,54 +123,115 @@ class ResponseClassifier:
 
 # -- built-in classifiers -------------------------------------------------
 
+
 def yesno_classifier() -> ResponseClassifier:
     """Pre-built yes/no classifier."""
     clf = ResponseClassifier(default_label="unknown")
-    clf.add_class("yes", [
-        r"\byes\b", r"\bsure\b", r"\babsolutely\b", r"\bcertainly\b",
-        r"\bof course\b", r"\bcorrect\b", r"\baffirmative\b", r"\byeah\b",
-        r"\bI can\b", r"\bI will\b",
-    ])
-    clf.add_class("no", [
-        r"\bno\b", r"\bnot\b", r"\bnever\b", r"\bcannot\b", r"\bcan't\b",
-        r"\bwon't\b", r"\bunable\b", r"\brefuse\b", r"\bdeny\b", r"\bnegative\b",
-    ])
+    clf.add_class(
+        "yes",
+        [
+            r"\byes\b",
+            r"\bsure\b",
+            r"\babsolutely\b",
+            r"\bcertainly\b",
+            r"\bof course\b",
+            r"\bcorrect\b",
+            r"\baffirmative\b",
+            r"\byeah\b",
+            r"\bI can\b",
+            r"\bI will\b",
+        ],
+    )
+    clf.add_class(
+        "no",
+        [
+            r"\bno\b",
+            r"\bnot\b",
+            r"\bnever\b",
+            r"\bcannot\b",
+            r"\bcan't\b",
+            r"\bwon't\b",
+            r"\bunable\b",
+            r"\brefuse\b",
+            r"\bdeny\b",
+            r"\bnegative\b",
+        ],
+    )
     return clf
 
 
 def sentiment_classifier() -> ResponseClassifier:
     """Pre-built positive/neutral/negative sentiment classifier."""
     clf = ResponseClassifier(default_label="neutral")
-    clf.add_class("positive", [
-        r"\bgreat\b", r"\bexcellent\b", r"\bhappy\b", r"\bwonderful\b",
-        r"\bfantastic\b", r"\blove\b", r"\bperfect\b", r"\bamazing\b",
-    ])
-    clf.add_class("negative", [
-        r"\bterrible\b", r"\bawful\b", r"\bhate\b", r"\bworse\b",
-        r"\bbad\b", r"\bhorrible\b", r"\bdisappoint\b", r"\bfrustrat\b",
-    ])
-    clf.add_class("neutral", [
-        r"\bokay\b", r"\bfine\b", r"\balright\b", r"\bneutral\b", r"\bso-so\b",
-    ])
+    clf.add_class(
+        "positive",
+        [
+            r"\bgreat\b",
+            r"\bexcellent\b",
+            r"\bhappy\b",
+            r"\bwonderful\b",
+            r"\bfantastic\b",
+            r"\blove\b",
+            r"\bperfect\b",
+            r"\bamazing\b",
+        ],
+    )
+    clf.add_class(
+        "negative",
+        [
+            r"\bterrible\b",
+            r"\bawful\b",
+            r"\bhate\b",
+            r"\bworse\b",
+            r"\bbad\b",
+            r"\bhorrible\b",
+            r"\bdisappoint\b",
+            r"\bfrustrat\b",
+        ],
+    )
+    clf.add_class(
+        "neutral",
+        [
+            r"\bokay\b",
+            r"\bfine\b",
+            r"\balright\b",
+            r"\bneutral\b",
+            r"\bso-so\b",
+        ],
+    )
     return clf
 
 
 def intent_classifier() -> ResponseClassifier:
     """Pre-built intent classifier: question / statement / instruction."""
     clf = ResponseClassifier(default_label="statement")
-    clf.add_class("question", [
-        r"\?$", r"^(what|who|where|when|why|how|is|are|do|does|can|could|would|should)\b",
-    ])
-    clf.add_class("instruction", [
-        r"^(please|kindly|make sure|ensure|do|don't|avoid|use|add|remove|fix|update)\b",
-    ])
-    clf.add_class("statement", [
-        r"\.$", r"\bI (think|believe|know|want|need)\b",
-    ])
+    clf.add_class(
+        "question",
+        [
+            r"\?$",
+            r"^(what|who|where|when|why|how|is|are|do|does|can|could|would|should)\b",
+        ],
+    )
+    clf.add_class(
+        "instruction",
+        [
+            r"^(please|kindly|make sure|ensure|do|don't|avoid|use|add|remove|fix|update)\b",
+        ],
+    )
+    clf.add_class(
+        "statement",
+        [
+            r"\.$",
+            r"\bI (think|believe|know|want|need)\b",
+        ],
+    )
     return clf
 
 
 __all__ = [
-    "ResponseClassifier", "ClassifyResult",
-    "yesno_classifier", "sentiment_classifier", "intent_classifier",
+    "ResponseClassifier",
+    "ClassifyResult",
+    "yesno_classifier",
+    "sentiment_classifier",
+    "intent_classifier",
 ]

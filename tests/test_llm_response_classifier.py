@@ -1,14 +1,15 @@
-import pytest
 from llm_response_classifier import (
-    ResponseClassifier, ClassifyResult,
-    yesno_classifier, sentiment_classifier, intent_classifier,
+    ResponseClassifier,
+    yesno_classifier,
+    sentiment_classifier,
+    intent_classifier,
 )
 
 
 def make_clf():
     clf = ResponseClassifier()
     clf.add_class("yes", [r"\byes\b", r"\bsure\b", r"\babsolutely\b"])
-    clf.add_class("no",  [r"\bno\b",  r"\bnever\b", r"\bnot\b"])
+    clf.add_class("no", [r"\bno\b", r"\bnever\b", r"\bnot\b"])
     return clf
 
 
@@ -94,12 +95,41 @@ def test_add_class_returns_self():
 def test_weight_affects_score():
     clf = ResponseClassifier()
     clf.add_class("high", [r"\bword\b"], weight=10.0)
-    clf.add_class("low",  [r"\bword\b"], weight=1.0)
+    clf.add_class("low", [r"\bword\b"], weight=1.0)
     r = clf.classify("word")
     assert r.label == "high"
 
 
+def test_negative_weight_only_falls_back_to_default():
+    # A class whose only match yields a non-positive score must not be reported
+    # as a confident result; it should fall back to the default label.
+    clf = ResponseClassifier(default_label="unknown")
+    clf.add_class("penalized", [r"\bx\b"], weight=-1.0)
+    r = clf.classify("x")
+    assert r.label == "unknown"
+    assert r.confidence == 0.0
+    assert r.matched_pattern is None
+
+
+def test_confidence_stays_within_unit_range_with_negative_weights():
+    # Mixing positive and negative weights must keep confidence in [0.0, 1.0].
+    clf = ResponseClassifier()
+    clf.add_class("pos", [r"good"], weight=1.0)
+    clf.add_class("neg", [r"bad"], weight=-5.0)
+    r = clf.classify("good bad")
+    assert r.label == "pos"
+    assert 0.0 <= r.confidence <= 1.0
+
+
+def test_confidence_never_negative():
+    clf = make_clf()
+    for text in ["yes", "no", "blah", "yes no never", ""]:
+        r = clf.classify(text)
+        assert 0.0 <= r.confidence <= 1.0
+
+
 # -- built-in classifiers --------------------------------------------------
+
 
 def test_yesno_yes():
     clf = yesno_classifier()
