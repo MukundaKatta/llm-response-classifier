@@ -10,13 +10,28 @@ from typing import Optional
 
 @dataclass
 class ClassifyResult:
+    """Outcome of classifying a single piece of text.
+
+    Attributes:
+        label: The winning class label, or the classifier's default label when
+            nothing matched.
+        confidence: A 0.0-1.0 value equal to the winning class's score divided
+            by the sum of all class scores. ``1.0`` means only one class
+            matched; ``0.0`` means nothing matched.
+        matched_pattern: The first raw pattern (as registered) that matched for
+            the winning class, or ``None`` when nothing matched.
+        scores: The raw ``(match_fraction * weight)`` score for every
+            registered class, keyed by label.
+    """
+
     label: str
-    confidence: float          # 0.0-1.0 based on match quality
+    confidence: float
     matched_pattern: Optional[str]
-    scores: dict[str, float]   # per-class scores
+    scores: dict[str, float]
 
     @property
     def is_uncertain(self) -> bool:
+        """True when confidence is below 0.5 (an ambiguous or no-match result)."""
         return self.confidence < 0.5
 
 
@@ -28,10 +43,21 @@ class _Class:
     _compiled: list[re.Pattern] = field(default_factory=list, repr=False)
 
     def __post_init__(self) -> None:
-        self._compiled = [re.compile(p, re.IGNORECASE) for p in self.patterns]
+        try:
+            self._compiled = [re.compile(p, re.IGNORECASE) for p in self.patterns]
+        except re.error as exc:
+            raise ValueError(
+                f"invalid regex pattern for class {self.label!r}: {exc}"
+            ) from exc
 
     def score(self, text: str) -> tuple[float, Optional[str]]:
-        """Return (score, first_matched_pattern)."""
+        """Return ``(match_fraction * weight, first_matched_pattern)``.
+
+        ``match_fraction`` is the share of this class's patterns that matched
+        ``text`` (0.0-1.0). A class with no patterns always scores 0.0.
+        """
+        if not self._compiled:
+            return 0.0, None
         matches = 0
         first_match: Optional[str] = None
         for p, raw in zip(self._compiled, self.patterns):
@@ -39,8 +65,6 @@ class _Class:
                 if first_match is None:
                     first_match = raw
                 matches += 1
-        if not self._compiled:
-            return 0.0, None
         return (matches / len(self._compiled)) * self.weight, first_match
 
 
@@ -68,12 +92,43 @@ class ResponseClassifier:
         patterns: list[str],
         weight: float = 1.0,
     ) -> "ResponseClassifier":
-        """Register a class with regex patterns (case-insensitive)."""
+        """Register a class with regex patterns (case-insensitive).
+
+        Args:
+            label: Name for this class. Must be non-empty.
+            patterns: Regex strings; a class matches a text when any of them
+                does. Compiled with ``re.IGNORECASE``.
+            weight: Multiplier applied to this class's match fraction. Must be
+                positive. Higher weights make the class win ties and dominate
+                scoring.
+
+        Returns:
+            ``self``, so calls can be chained.
+
+        Raises:
+            ValueError: If ``label`` is empty, ``weight`` is not positive, or
+                any pattern is not a valid regular expression.
+        """
+        if not label:
+            raise ValueError("label must be a non-empty string")
+        if weight <= 0:
+            raise ValueError(f"weight must be positive, got {weight!r}")
         self._classes.append(_Class(label=label, patterns=patterns, weight=weight))
         return self
 
     def classify(self, text: str) -> ClassifyResult:
-        """Classify text against all registered classes."""
+        """Classify ``text`` against all registered classes.
+
+        Args:
+            text: The text to classify. ``None`` is treated as an empty string.
+
+        Returns:
+            A :class:`ClassifyResult`. When no class matches (or none are
+            registered), the result uses the classifier's default label with a
+            confidence of 0.0.
+        """
+        if text is None:
+            text = ""
         if not self._classes:
             return ClassifyResult(
                 label=self._default,
@@ -111,10 +166,12 @@ class ResponseClassifier:
         )
 
     def classify_many(self, texts: list[str]) -> list[ClassifyResult]:
+        """Classify a list of texts, returning one result per input."""
         return [self.classify(t) for t in texts]
 
     @property
     def labels(self) -> list[str]:
+        """The labels of all registered classes, in registration order."""
         return [c.label for c in self._classes]
 
 
